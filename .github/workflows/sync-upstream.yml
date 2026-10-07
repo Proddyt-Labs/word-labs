@@ -1,0 +1,20 @@
+name: Sync upstream
+
+# Fork: brings the upstream (storytold) main into this fork's main every day (GitHub's "Sync fork"),
+# keeping the fork's own features. If the merge conflicts, the run fails and GitHub emails the owner.
+on:
+  schedule:
+    - cron: "40 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge upstream main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main

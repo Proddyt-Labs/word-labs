@@ -1,0 +1,140 @@
+name: Labs release
+
+# Proddyt Switch: builds the app for Windows, Linux and macOS and publishes a GitHub Release
+# (portable archives + a Windows installer) whenever main has new commits. Runs on pushes to main,
+# every day after the upstream sync, or by hand. The app's updater reads these releases.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: labs-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.c.outputs.build }}
+      app: ${{ steps.c.outputs.app }}
+      tag: ${{ steps.c.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          app=$(ls apps | grep -v -e '-cli$' -e '-web$' | head -1)
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          ver=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          sha=$(git rev-parse --short HEAD)
+          echo "tag=v${ver}-labs.$(date -u +%Y%m%d).${sha}" >> "$GITHUB_OUTPUT"
+          last=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$last" ] || ! echo "$last" | grep -q "$sha"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"; echo "main sem mudança desde $last"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, plat: windows-x64 }
+          - { os: ubuntu-latest, plat: linux-x64 }
+          - { os: macos-latest, plat: macos-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system dependencies (egui/winit/rfd)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libssl-dev libgtk-3-dev libasound2-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        shell: bash
+        run: cargo build --release -p "${{ needs.check.outputs.app }}" -p "${{ needs.check.outputs.app }}-cli"
+      - name: Package (portable)
+        shell: bash
+        run: |
+          app="${{ needs.check.outputs.app }}"; out="dist/${app}-${{ matrix.plat }}"
+          mkdir -p "$out"
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          cp "target/release/${app}${ext}" "target/release/${app}-cli${ext}" "$out/"
+          cp LICENSE-MIT LICENSE-APACHE "$out/" 2>/dev/null || true
+          if [ -f NOTICE ]; then cp NOTICE "$out/"; fi
+          echo "${{ needs.check.outputs.tag }}" > "$out/VERSION"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then 7z a -tzip "${app}-${{ matrix.plat }}-portable.zip" "${app}-${{ matrix.plat }}" > /dev/null
+          else tar -czf "${app}-${{ matrix.plat }}-portable.tar.gz" "${app}-${{ matrix.plat }}"; fi
+      - name: Windows installer (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $app = "${{ needs.check.outputs.app }}"; $tag = "${{ needs.check.outputs.tag }}"
+          $nome = (Get-Culture).TextInfo.ToTitleCase(($app -replace 'craft$','')) + ' Labs'
+          $src = (Resolve-Path "dist/$app-windows-x64").Path
+          $iss = @(
+            '[Setup]',
+            "AppName=$nome",
+            "AppVersion=$tag",
+            'AppPublisher=Proddyt Labs (fork of ArtCraft)',
+            "DefaultDirName={localappdata}\Programs\Proddyt Switch\$nome",
+            'DefaultGroupName=Proddyt Switch',
+            'PrivilegesRequired=lowest',
+            'OutputDir=dist',
+            "OutputBaseFilename=$app-windows-x64-setup",
+            'Compression=lzma2',
+            'SolidCompression=yes',
+            '[Tasks]',
+            'Name: desktopicon; Description: "Atalho na area de trabalho"',
+            '[Files]',
+            "Source: ""$src\*""; DestDir: ""{app}""; Flags: recursesubdirs",
+            '[Icons]',
+            "Name: ""{group}\$nome""; Filename: ""{app}\$app.exe""",
+            "Name: ""{userdesktop}\$nome""; Filename: ""{app}\$app.exe""; Tasks: desktopicon",
+            '[Run]',
+            "Filename: ""{app}\$app.exe""; Description: ""Abrir $nome""; Flags: nowait postinstall skipifsilent"
+          )
+          $iss | Set-Content -Encoding utf8 setup.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" setup.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.plat }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*-setup.exe
+          retention-days: 14
+
+  release:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.check.outputs.tag }}" assets/* --target "$GITHUB_SHA" \
+            --title "${{ needs.check.outputs.tag }}" \
+            --notes "Build automático do Proddyt Switch ($(git rev-parse --short HEAD)). Mudanças: suas features (PRs deste fork) + o que veio do projeto original (sync diário)."
