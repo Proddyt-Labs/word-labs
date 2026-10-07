@@ -135,6 +135,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ needs.check.outputs.tag }}" assets/* --target "$GITHUB_SHA" \
+          # Only the packages: an artifact may carry folders, and gh can't upload a directory.
+          mapfile -t files < <(find assets -type f \( -name '*-portable.zip' -o -name '*-portable.tar.gz' -o -name '*-setup.exe' \))
+          printf '%s\n' "${files[@]}"
+          gh release create "${{ needs.check.outputs.tag }}" "${files[@]}" --target "$GITHUB_SHA" \
             --title "${{ needs.check.outputs.tag }}" \
             --notes "Build automático do Proddyt Switch ($(git rev-parse --short HEAD)). Mudanças: suas features (PRs deste fork) + o que veio do projeto original (sync diário)."
