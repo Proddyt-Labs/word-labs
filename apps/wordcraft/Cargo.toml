@@ -11,6 +11,7 @@ description = "WordCraft desktop app"
 workspace = true
 
 [dependencies]
+labs-updater = { version = "0.1.0", path = "../../crates/labs-updater" }
 wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-ui-egui = { workspace = true }

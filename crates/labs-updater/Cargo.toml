@@ -1,0 +1,13 @@
+[package]
+name = "labs-updater"
+description = "Proddyt Switch: asks to update from the fork's GitHub releases and runs the installer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Vendored copy: the source of truth is Proddyt-Labs/switch-tools (crates/labs-updater).
+
+[dependencies]
+egui = { workspace = true }
+serde_json = { workspace = true }
